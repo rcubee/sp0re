@@ -1,13 +1,124 @@
 #include "m0ss.h"
+#include "m0ss_conf.h"
+#include <stddef.h>
 
-#define SCB_ICSR            0xE000ED04
+#define SCB_ICSR            0xE000ED04U
 #define SCB_ICSR_PENDSVSET  (1U << 28)
+
+#define SCB_SHPR3           0xE000ED20U
+#define SCB_SHPR3_PRI_14    (0xFFU << 16)
+#define SCB_SHPR3_PRI_15    (0xFFU << 24)
+
+#define SYSTICK_CSR             0xE000E010U
+#define SYSTICK_CSR_ENABLE      (1U << 0)
+#define SYSTICK_CSR_TICKINT     (1U << 1)
+#define SYSTICK_CSR_CLKSOURCE   (1U << 2)
+
+#define SYSTICK_RVR         0xE000E014U
+#define SYSTICK_RVR_RELOAD  0xFFFFFFU
+
+#define SYSTICK_RVR_RELOAD_VALUE ((M0SS_CONF_CORE_CLK_HZ / M0SS_CONF_TICK_RATE_HZ) - 1U)
+_Static_assert((SYSTICK_RVR_RELOAD_VALUE >= 0x00000001U && SYSTICK_RVR_RELOAD_VALUE <= 0x00FFFFFFU), "SysTick RVR RELOAD value is out of range.");
+
+#define SYSTICK_CVR 0xE000E018U
+
+#define THREAD_IDLE_STACK_CAPACITY (1024U)
 
 #define DISABLE_IRQ() asm volatile("CPSID i")
 #define ENABLE_IRQ()  asm volatile("CPSIE i")
 
+static m0ss_thread* threads[M0SS_CONF_MAX_THREAD_COUNT];
+static uint8_t thread_count;
+
 static m0ss_thread* volatile thread_running;
 static m0ss_thread* volatile thread_to_run;
+
+static m0ss_thread thread_idle;
+_Alignas(8) static uint8_t thread_idle_stack[THREAD_IDLE_STACK_CAPACITY];
+
+static void thread_idle_func()
+{
+    while (1) {
+        asm volatile("WFI");
+
+        m0ss_schedule();
+    }
+}
+
+static void m0ss_thread_init(m0ss_thread* thread, m0ss_thread_priority priority, m0ss_thread_func_ptr func_ptr, void* stack_buf, uint32_t stack_buf_capacity)
+{
+    thread->priority = priority;
+
+    thread->ticks_to_block = 0U;
+
+    /* Note:
+     * In ARM Cortex M0/M0+:
+     * 1. The stack grows downward (full-descending allocation model)
+     * 2. Pushing stores the register value at the newly decremented address (SP - 4)
+     */
+
+#ifdef DEBUG
+    // Prefill the stack buffer with reset value.
+    for (uint8_t* sp = (uint8_t*)stack_buf; sp < (uint8_t*)stack_buf + stack_buf_capacity; ++sp) {
+        *sp = 0x5A;
+    }
+#endif
+
+    // Stack pointer has to be 8 byte-aligned (round down if necessary).
+    uint32_t* sp = (uint32_t*)(((uint32_t)stack_buf + stack_buf_capacity) & (~0x07U));
+
+    /* Note: Cortex™-M0+ Devices, Generic User Guide, 2.3.6 Exception entry and return
+     * On exception entry, the following registers are pushed onto the stack:
+     * xPSR, PC, LR, R12, R3, R2, R1, R0
+     */
+
+    /* These registers are pushed by hardware on exception entry (stacking). */
+    *(--sp) = 1U << 24; // PSR
+    *(--sp) = (uint32_t)func_ptr; // PC (R15)
+    *(--sp) = 0x0000000EU; // LR (R14)
+    *(--sp) = 0x0000000CU; // R12
+    *(--sp) = 0x00000003U; // R3
+    *(--sp) = 0x00000002U; // R2
+    *(--sp) = 0x00000001U; // R1
+    *(--sp) = 0x00000000U; // R0
+
+    /* These registers are NOT pushed by hardware on exception entry. */
+    *(--sp) = 0x0000000BU; // R11
+    *(--sp) = 0x0000000AU; // R10
+    *(--sp) = 0x00000009U; // R9
+    *(--sp) = 0x00000008U; // R8
+    *(--sp) = 0x00000007U; // R7
+    *(--sp) = 0x00000006U; // R6
+    *(--sp) = 0x00000005U; // R5
+    *(--sp) = 0x00000004U; // R4
+
+    thread->sp = sp;
+}
+
+static void m0ss_init()
+{
+    m0ss_thread_init(&thread_idle, M0SS_THREAD_PRIORITY_LOWEST, thread_idle_func, thread_idle_stack, THREAD_IDLE_STACK_CAPACITY);
+
+    // Set PendSV and SysTick system handler priority to the lowest possible.
+    *(volatile uint32_t*)SCB_SHPR3 |= SCB_SHPR3_PRI_14 | SCB_SHPR3_PRI_15;
+
+    *(volatile uint32_t*)SYSTICK_RVR = SYSTICK_RVR_RELOAD_VALUE;
+    *(volatile uint32_t*)SYSTICK_CVR = 0U;
+    *(volatile uint32_t*)SYSTICK_CSR = SYSTICK_CSR_ENABLE | SYSTICK_CSR_TICKINT | SYSTICK_CSR_CLKSOURCE;
+}
+
+static void m0ss_tick()
+{
+    for (uint8_t thread_index = 0; thread_index < thread_count; ++thread_index) {
+        m0ss_thread* thread = threads[thread_index];
+
+        if (thread->ticks_to_block == 0) {
+            continue;
+        }
+
+        --(thread->ticks_to_block);
+    }
+}
 
 // Note: Performs the context switch.
 __attribute__((naked))
@@ -74,59 +185,27 @@ void PendSV_Handler(void)
     asm volatile("BX lr");
 }
 
-void m0ss_thread_create(m0ss_thread* thread, m0ss_thread_func_ptr func_ptr, void* stack_buf, uint32_t stack_buf_capacity)
+void SysTick_Handler()
 {
-    /* Note:
-     * In ARM Cortex M0/M0+:
-     * 1. The stack grows downward (full-descending allocation model)
-     * 2. Pushing stores the register value at the newly decremented address (SP - 4)
-     */
+    m0ss_tick();
 
-#ifdef DEBUG
-    // Prefill the stack buffer with reset value.
-    for (uint8_t* sp = (uint8_t*)stack_buf; sp < (uint8_t*)stack_buf + stack_buf_capacity; ++sp) {
-        *sp = 0x5A;
-    }
-#endif
+    m0ss_schedule();
+}
 
-    // Stack pointer has to be 8 byte-aligned (round down if necessary).
-    uint32_t* sp = (uint32_t*)(((uint32_t)stack_buf + stack_buf_capacity) & (~0x07));
+void m0ss_thread_create(m0ss_thread* thread, m0ss_thread_priority priority, m0ss_thread_func_ptr func_ptr, void* stack_buf, uint32_t stack_buf_capacity)
+{
+    // TODO: Add safety checks.
 
-    /* Note: Cortex™-M0+ Devices, Generic User Guide, 2.3.6 Exception entry and return
-     * On exception entry, the following registers are pushed onto the stack:
-     * xPSR, PC, LR, R12, R3, R2, R1, R0
-     */
+    m0ss_thread_init(thread, priority, func_ptr, stack_buf, stack_buf_capacity);
 
-    /* These registers are pushed by hardware on exception entry (stacking). */
-    *(--sp) = 1U << 24; // PSR
-    *(--sp) = (uint32_t)func_ptr; // PC (R15)
-    *(--sp) = 0x0000000E; // LR (R14)
-    *(--sp) = 0x0000000C; // R12
-    *(--sp) = 0x00000003; // R3
-    *(--sp) = 0x00000002; // R2
-    *(--sp) = 0x00000001; // R1
-    *(--sp) = 0x00000000; // R0
-
-    /* These registers are NOT pushed by hardware on exception entry. */
-    *(--sp) = 0x0000000B; // R11
-    *(--sp) = 0x0000000A; // R10
-    *(--sp) = 0x00000009; // R9
-    *(--sp) = 0x00000008; // R8
-    *(--sp) = 0x00000007; // R7
-    *(--sp) = 0x00000006; // R6
-    *(--sp) = 0x00000005; // R5
-    *(--sp) = 0x00000004; // R4
-
-    thread->sp = sp;
-
-    // TODO: Implement scheduling.
-    thread_to_run = thread;
+    threads[thread_count++] = thread;
 }
 
 void m0ss_start()
 {
-    // Note: Thread mode, using MSP.
+    m0ss_init();
 
+    // Note: Thread mode, using MSP.
     m0ss_schedule();
 }
 
@@ -137,10 +216,34 @@ void m0ss_schedule()
 
     DISABLE_IRQ();
 
-    // TODO: Implement scheduling.
-    thread_to_run = thread_to_run;
+    thread_to_run = NULL;
 
-    *(volatile uint32_t*)SCB_ICSR |= SCB_ICSR_PENDSVSET;
+    for (uint8_t thread_index = 0; thread_index < thread_count; ++thread_index) {
+        m0ss_thread* thread = threads[thread_index];
+
+        if (thread->ticks_to_block) {
+            continue;
+        }
+
+        if ((thread_to_run == NULL) || (thread->priority > thread_to_run->priority)) {
+            thread_to_run = thread;
+        }
+    }
+
+    if (thread_to_run == NULL) {
+        thread_to_run = &thread_idle;
+    }
+
+    if (thread_to_run != thread_running) {
+        *(volatile uint32_t*)SCB_ICSR |= SCB_ICSR_PENDSVSET;
+    }
 
     ENABLE_IRQ();
+}
+
+void m0ss_delay(uint32_t ticks)
+{
+    thread_running->ticks_to_block = ticks;
+
+    m0ss_schedule();
 }
