@@ -180,7 +180,7 @@ void PendSV_Handler(void)
 
         /* psp = thread_to_run->sp */
 
-        "LDR r0, [r2, #0]\n\t" // r0 holds thread_to_run->sp
+        "LDR r0, [r2, %[offsetof_sp]]\n\t" // r0 holds thread_to_run->sp
 
         /* Note: Pop r4-r11 from the thread's stack */
 
@@ -202,13 +202,18 @@ void PendSV_Handler(void)
 
         "MSR psp, r0\n\t"
 
-        // Note: Hardware will pop the remaining registers from the thread's stack using process stack pointer.
+        /* Note: Hardware will pop the remaining registers from the thread's stack using process stack pointer. */
 
         "CPSIE i\n\t" // Enable interrupts
 
-        // Note: Return to thread mode, use process stack pointer.
+        /* Note: Return to thread mode, use process stack pointer. */
+
         "LDR r0, =0xFFFFFFFD\n\t"
         "BX r0"
+
+        : /* outputs */
+        : /* inputs */      [offsetof_sp] "i" (offsetof(m0ss_thread, sp))
+        : /* clobbers */    "memory" // TODO: Add other clobbers?
     );
 }
 
