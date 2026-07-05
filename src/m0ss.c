@@ -135,20 +135,35 @@ void PendSV_Handler(void)
     asm volatile("BEQ thread_not_running");
 
     // ARMv6 can't PUSH to high registers directly.
-    asm volatile("MOV r2, r11");
-    asm volatile("PUSH {r2}");
-    asm volatile("MOV r2, r10");
-    asm volatile("PUSH {r2}");
-    asm volatile("MOV r2, r9");
-    asm volatile("PUSH {r2}");
-    asm volatile("MOV r2, r8");
-    asm volatile("PUSH {r2}");
+    asm volatile("MRS r3, psp"); // r3 = psp
 
-    asm volatile("PUSH {r4-r7}");
+    asm volatile("MOV r2, r11");
+    asm volatile("SUB r3, #4");
+    asm volatile("STR r2, [r3]");
+
+    asm volatile("MOV r2, r10");
+    asm volatile("SUB r3, #4");
+    asm volatile("STR r2, [r3]");
+
+    asm volatile("MOV r2, r9");
+    asm volatile("SUB r3, #4");
+    asm volatile("STR r2, [r3]");
+
+    asm volatile("MOV r2, r8");
+    asm volatile("SUB r3, #4");
+    asm volatile("STR r2, [r3]");
+
+    asm volatile("SUB r3, #4");
+    asm volatile("STR r7, [r3]");
+    asm volatile("SUB r3, #4");
+    asm volatile("STR r6, [r3]");
+    asm volatile("SUB r3, #4");
+    asm volatile("STR r5, [r3]");
+    asm volatile("SUB r3, #4");
+    asm volatile("STR r4, [r3]");
 
     /* thread_running->stack_ptr = sp; */
-    asm volatile("MOV r2, sp"); // r2 = sp
-    asm volatile("STR r2, [r1, #0]"); // thread_ruuning->stack_ptr = r2
+    asm volatile("STR r3, [r1, #0]"); // thread_runing->stack_ptr = r3
     /* } */
 
     asm volatile("thread_not_running:");
@@ -159,30 +174,36 @@ void PendSV_Handler(void)
     asm volatile("STR r2, [r0]"); // store thread_to_run to thread_running
 
     /* sp = thread_to_run->stack_ptr */
-    // ARMv6 can't LDR to SP directly.
+
     asm volatile("LDR r0, [r2, #0]"); // r0 = thread_to_run->stack_ptr
-    asm volatile("MOV sp, r0"); // sp = r0
 
     /* Note: Pop manually pushed registers. */
 
-    asm volatile("POP {r4-r7}"); // load r4-r7
+    asm volatile("LDR r4, [r0, #0]");
+    asm volatile("LDR r5, [r0, #4]");
+    asm volatile("LDR r6, [r0, #8]");
+    asm volatile("LDR r7, [r0, #12]");
 
-    // ARMv6 can't POP high registers directly.
-    asm volatile("POP {r0}");
-    asm volatile("MOV r8, r0");
-    asm volatile("POP {r0}");
-    asm volatile("MOV r9, r0");
-    asm volatile("POP {r0}");
-    asm volatile("MOV r10, r0");
-    asm volatile("POP {r0}");
-    asm volatile("MOV r11, r0");
+    asm volatile("LDR r1, [r0, #16]");
+    asm volatile("MOV r8, r1");
+    asm volatile("LDR r1, [r0, #20]");
+    asm volatile("MOV r9, r1");
+    asm volatile("LDR r1, [r0, #24]");
+    asm volatile("MOV r10, r1");
+    asm volatile("LDR r1, [r0, #28]");
+    asm volatile("MOV r11, r1");
+
+    asm volatile("ADD r0, #32");
+
+    asm volatile("MSR psp, r0"); // psp = r0
 
     // Note: Hardware will pop the remaining registers from the stack.
 
     asm volatile("CPSIE i"); // Enable interrupts
 
-    // Note: LR contains EXC_RETURN value pushed right after stacking on exception entry.
-    asm volatile("BX lr");
+    // Note: Return to thread mode, get state from PSP.
+    asm volatile("LDR r0, =0xFFFFFFFD");
+    asm volatile("BX r0");
 }
 
 void SysTick_Handler()
@@ -205,7 +226,6 @@ void m0ss_start()
 {
     m0ss_init();
 
-    // Note: Thread mode, using MSP.
     m0ss_schedule();
 }
 
