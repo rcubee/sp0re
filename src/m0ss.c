@@ -126,84 +126,90 @@ void PendSV_Handler(void)
 {
     // Note: This is a critical section which accesses the scheduler state.
 
-    asm volatile("CPSID i"); // Disable interrupts
+    asm volatile (
+        "CPSID i\n\t" // Disable interrupts
 
-    /* if (thread_running) { */
-    asm volatile("LDR r0, =thread_running"); // r0 holds &thread_running
-    asm volatile("LDR r1, [r0]"); // r1 holds thread_running (a pointer)
-    asm volatile("CMP r1, #0");
-    asm volatile("BEQ thread_not_running");
+        /* if (thread_running) { */
+        "LDR r0, =thread_running\n\t" // r0 holds &thread_running
+        "LDR r1, [r0]\n\t" // r1 holds thread_running
+        "CMP r1, #0\n\t"
+        "BEQ thread_not_running\n\t"
 
-    // ARMv6 can't PUSH to high registers directly.
-    asm volatile("MRS r3, psp"); // r3 = psp
+        /* Note: Push r4-r11 to the thread's stack */
 
-    asm volatile("MOV r2, r11");
-    asm volatile("SUB r3, #4");
-    asm volatile("STR r2, [r3]");
+        "MRS r3, psp\n\t" // r3 holds psp
 
-    asm volatile("MOV r2, r10");
-    asm volatile("SUB r3, #4");
-    asm volatile("STR r2, [r3]");
+        "MOV r2, r11\n\t"
+        "SUB r3, #4\n\t"
+        "STR r2, [r3]\n\t"
 
-    asm volatile("MOV r2, r9");
-    asm volatile("SUB r3, #4");
-    asm volatile("STR r2, [r3]");
+        "MOV r2, r10\n\t"
+        "SUB r3, #4\n\t"
+        "STR r2, [r3]\n\t"
 
-    asm volatile("MOV r2, r8");
-    asm volatile("SUB r3, #4");
-    asm volatile("STR r2, [r3]");
+        "MOV r2, r9\n\t"
+        "SUB r3, #4\n\t"
+        "STR r2, [r3]\n\t"
 
-    asm volatile("SUB r3, #4");
-    asm volatile("STR r7, [r3]");
-    asm volatile("SUB r3, #4");
-    asm volatile("STR r6, [r3]");
-    asm volatile("SUB r3, #4");
-    asm volatile("STR r5, [r3]");
-    asm volatile("SUB r3, #4");
-    asm volatile("STR r4, [r3]");
+        "MOV r2, r8\n\t"
+        "SUB r3, #4\n\t"
+        "STR r2, [r3]\n\t"
 
-    /* thread_running->stack_ptr = sp; */
-    asm volatile("STR r3, [r1, #0]"); // thread_runing->stack_ptr = r3
-    /* } */
+        "SUB r3, #4\n\t"
+        "STR r7, [r3]\n\t"
+        "SUB r3, #4\n\t"
+        "STR r6, [r3]\n\t"
+        "SUB r3, #4\n\t"
+        "STR r5, [r3]\n\t"
+        "SUB r3, #4\n\t"
+        "STR r4, [r3]\n\t"
 
-    asm volatile("thread_not_running:");
+        /* thread_running->sp = psp; */
 
-    /* thread_running = thread_to_run; */
-    asm volatile("LDR r1, =thread_to_run"); // r1 holds &thread_to_run
-    asm volatile("LDR r2, [r1]"); // r2 holds thread_to_run (a pointer)
-    asm volatile("STR r2, [r0]"); // store thread_to_run to thread_running
+        "STR r3, [r1, #0]\n\t"
 
-    /* sp = thread_to_run->stack_ptr */
+        /* } */
 
-    asm volatile("LDR r0, [r2, #0]"); // r0 = thread_to_run->stack_ptr
+        "thread_not_running:\n\t"
 
-    /* Note: Pop manually pushed registers. */
+        /* thread_running = thread_to_run; */
 
-    asm volatile("LDR r4, [r0, #0]");
-    asm volatile("LDR r5, [r0, #4]");
-    asm volatile("LDR r6, [r0, #8]");
-    asm volatile("LDR r7, [r0, #12]");
+        "LDR r1, =thread_to_run\n\t" // r1 holds &thread_to_run
+        "LDR r2, [r1]\n\t" // r2 holds thread_to_run
+        "STR r2, [r0]\n\t"
 
-    asm volatile("LDR r1, [r0, #16]");
-    asm volatile("MOV r8, r1");
-    asm volatile("LDR r1, [r0, #20]");
-    asm volatile("MOV r9, r1");
-    asm volatile("LDR r1, [r0, #24]");
-    asm volatile("MOV r10, r1");
-    asm volatile("LDR r1, [r0, #28]");
-    asm volatile("MOV r11, r1");
+        /* psp = thread_to_run->sp */
 
-    asm volatile("ADD r0, #32");
+        "LDR r0, [r2, #0]\n\t" // r0 holds thread_to_run->sp
 
-    asm volatile("MSR psp, r0"); // psp = r0
+        /* Note: Pop r4-r11 from the thread's stack */
 
-    // Note: Hardware will pop the remaining registers from the stack.
+        "LDR r4, [r0, #0]\n\t"
+        "LDR r5, [r0, #4]\n\t"
+        "LDR r6, [r0, #8]\n\t"
+        "LDR r7, [r0, #12]\n\t"
 
-    asm volatile("CPSIE i"); // Enable interrupts
+        "LDR r1, [r0, #16]\n\t"
+        "MOV r8, r1\n\t"
+        "LDR r1, [r0, #20]\n\t"
+        "MOV r9, r1\n\t"
+        "LDR r1, [r0, #24]\n\t"
+        "MOV r10, r1\n\t"
+        "LDR r1, [r0, #28]\n\t"
+        "MOV r11, r1\n\t"
 
-    // Note: Return to thread mode, get state from PSP.
-    asm volatile("LDR r0, =0xFFFFFFFD");
-    asm volatile("BX r0");
+        "ADD r0, #32\n\t"
+
+        "MSR psp, r0\n\t"
+
+        // Note: Hardware will pop the remaining registers from the thread's stack using process stack pointer.
+
+        "CPSIE i\n\t" // Enable interrupts
+
+        // Note: Return to thread mode, use process stack pointer.
+        "LDR r0, =0xFFFFFFFD\n\t"
+        "BX r0"
+    );
 }
 
 void SysTick_Handler()
