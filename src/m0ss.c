@@ -127,6 +127,7 @@ void PendSV_Handler(void)
     // Note: This is a critical section which accesses the scheduler state.
 
     asm volatile (
+        // TODO: Use UAL.
         "CPSID i\n\t" // Disable interrupts
 
         /* if (thread_running) { */
@@ -139,30 +140,18 @@ void PendSV_Handler(void)
 
         "MRS r3, psp\n\t" // r3 holds psp
 
-        "MOV r2, r11\n\t"
-        "SUB r3, #4\n\t"
-        "STR r2, [r3]\n\t"
+        "SUB r3, #32\n\t" // Note: Reserve space for {r4-r11}
 
-        "MOV r2, r10\n\t"
-        "SUB r3, #4\n\t"
-        "STR r2, [r3]\n\t"
+        "STMIA r3!, {r4-r7}\n\t" // Note: Push {r4-r7}
 
-        "MOV r2, r9\n\t"
-        "SUB r3, #4\n\t"
-        "STR r2, [r3]\n\t"
+        "MOV r4, r8\n\t"
+        "MOV r5, r9\n\t"
+        "MOV r6, r10\n\t"
+        "MOV r7, r11\n\t"
 
-        "MOV r2, r8\n\t"
-        "SUB r3, #4\n\t"
-        "STR r2, [r3]\n\t"
+        "STMIA r3!, {r4-r7}\n\t" // Note: Push {r8-r11}
 
-        "SUB r3, #4\n\t"
-        "STR r7, [r3]\n\t"
-        "SUB r3, #4\n\t"
-        "STR r6, [r3]\n\t"
-        "SUB r3, #4\n\t"
-        "STR r5, [r3]\n\t"
-        "SUB r3, #4\n\t"
-        "STR r4, [r3]\n\t"
+        "SUB r3, #32\n\t"
 
         /* thread_running->sp = psp; */
 
@@ -182,23 +171,19 @@ void PendSV_Handler(void)
 
         "LDR r0, [r2, %[offsetof_sp]]\n\t" // r0 holds thread_to_run->sp
 
-        /* Note: Pop r4-r11 from the thread's stack */
+        "ADD r0, #16\n\t"
 
-        "LDR r4, [r0, #0]\n\t"
-        "LDR r5, [r0, #4]\n\t"
-        "LDR r6, [r0, #8]\n\t"
-        "LDR r7, [r0, #12]\n\t"
+        "LDMIA r0!, {r4-r7}\n\t" // Note: Pop {r8-r11}
+        "MOV r8, r4 \n\t"
+        "MOV r9, r5 \n\t"
+        "MOV r10, r6 \n\t"
+        "MOV r11, r7 \n\t"
 
-        "LDR r1, [r0, #16]\n\t"
-        "MOV r8, r1\n\t"
-        "LDR r1, [r0, #20]\n\t"
-        "MOV r9, r1\n\t"
-        "LDR r1, [r0, #24]\n\t"
-        "MOV r10, r1\n\t"
-        "LDR r1, [r0, #28]\n\t"
-        "MOV r11, r1\n\t"
+        "SUB r0, #32\n\t"
 
-        "ADD r0, #32\n\t"
+        "LDMIA r0!, {r4-r7}\n\t" // Note: Pop {r4-r7}
+
+        "ADD r0, #16\n\t"
 
         "MSR psp, r0\n\t"
 
