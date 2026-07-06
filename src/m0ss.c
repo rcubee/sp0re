@@ -155,7 +155,7 @@ void PendSV_Handler(void)
 
         /* thread_running->sp = psp; */
 
-        "STR r3, [r1, #0]\n\t"
+        "STR r3, [r1, %[offsetof_sp]]\n\t"
 
         /* } */
 
