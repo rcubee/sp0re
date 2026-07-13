@@ -24,9 +24,6 @@ _Static_assert((SYSTICK_RVR_RELOAD_VALUE >= 0x00000001U && SYSTICK_RVR_RELOAD_VA
 
 #define THREAD_IDLE_STACK_CAPACITY (1024U)
 
-#define DISABLE_IRQ() asm volatile("CPSID i")
-#define ENABLE_IRQ()  asm volatile("CPSIE i")
-
 static m0ss_thread* threads[M0SS_CONF_MAX_THREAD_COUNT];
 static uint8_t thread_count;
 
@@ -230,7 +227,8 @@ void m0ss_schedule()
 {
     // Note: This is a critical section which accesses the scheduler state.
 
-    DISABLE_IRQ();
+    uint32_t primask;
+    M0SS_ENTER_CRITICAL(primask);
 
     thread_to_run = NULL;
 
@@ -254,7 +252,7 @@ void m0ss_schedule()
         *(volatile uint32_t*)SCB_ICSR |= SCB_ICSR_PENDSVSET;
     }
 
-    ENABLE_IRQ();
+    M0SS_EXIT_CRITICAL(primask);
 }
 
 void m0ss_delay(uint32_t ticks)

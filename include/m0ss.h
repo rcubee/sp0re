@@ -5,6 +5,23 @@
 
 #define M0SS_THREAD_PRIORITY_LOWEST 0U
 
+#define M0SS_ENTER_CRITICAL(primask) \
+    asm volatile( \
+        "MRS %0, primask\n\t" \
+        "CPSID i\n\t" \
+        : /* outputs */ "=r" (primask) \
+        : /* inputs */ \
+        : /* clobbers */ "memory" \
+    )
+
+#define M0SS_EXIT_CRITICAL(primask) \
+    asm volatile( \
+        "MSR primask, %0\n\t" \
+        : /* outputs */ \
+        : /* inputs */ "r" (primask) \
+        : /* clobbers */ "memory" \
+    )
+
 typedef void* m0ss_thread_func_ptr;
 
 typedef uint8_t m0ss_thread_priority;
