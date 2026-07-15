@@ -68,7 +68,7 @@ void uart_thread_func()
     const char* message = "Hello, sp0re!\n";
 
     while (1) {
-        HAL_UART_Transmit(&huart2, (uint8_t*)message, 13, HAL_MAX_DELAY);
+        HAL_UART_Transmit(&huart2, (uint8_t*)message, 14, HAL_MAX_DELAY);
 
         sp0re_delay(1000);
     }
