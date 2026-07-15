@@ -3,6 +3,8 @@
 
 #include <stdint.h>
 
+#define SP0RE_TICK_MAX UINT64_MAX
+
 #define SP0RE_THREAD_PRIORITY_LOWEST 0U
 
 #define SP0RE_DISABLE_IRQ() asm volatile("CPSID i")
