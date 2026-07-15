@@ -1,5 +1,5 @@
-#include "m0ss.h"
-#include "m0ss_conf.h"
+#include "sp0re.h"
+#include "sp0re_conf.h"
 #include <stddef.h>
 
 #define SCB_ICSR            0xE000ED04U
@@ -17,20 +17,20 @@
 #define SYSTICK_RVR         0xE000E014U
 #define SYSTICK_RVR_RELOAD  0xFFFFFFU
 
-#define SYSTICK_RVR_RELOAD_VALUE ((M0SS_CONF_CORE_CLK_HZ / M0SS_CONF_TICK_RATE_HZ) - 1U)
+#define SYSTICK_RVR_RELOAD_VALUE ((SP0RE_CONF_CORE_CLK_HZ / SP0RE_CONF_TICK_RATE_HZ) - 1U)
 _Static_assert((SYSTICK_RVR_RELOAD_VALUE >= 0x00000001U && SYSTICK_RVR_RELOAD_VALUE <= 0x00FFFFFFU), "SysTick RVR RELOAD value is out of range.");
 
 #define SYSTICK_CVR 0xE000E018U
 
 #define THREAD_IDLE_STACK_CAPACITY (1024U)
 
-static m0ss_thread* threads[M0SS_CONF_MAX_THREAD_COUNT];
+static sp0re_thread* threads[SP0RE_CONF_MAX_THREAD_COUNT];
 static uint8_t thread_count;
 
-static m0ss_thread* volatile thread_running;
-static m0ss_thread* volatile thread_to_run;
+static sp0re_thread* volatile thread_running;
+static sp0re_thread* volatile thread_to_run;
 
-static m0ss_thread thread_idle;
+static sp0re_thread thread_idle;
 _Alignas(8) static uint8_t thread_idle_stack[THREAD_IDLE_STACK_CAPACITY];
 
 static void thread_idle_func()
@@ -38,11 +38,11 @@ static void thread_idle_func()
     while (1) {
         asm volatile("WFI");
 
-        m0ss_schedule();
+        sp0re_schedule();
     }
 }
 
-static void m0ss_thread_init(m0ss_thread* thread, m0ss_thread_priority priority, m0ss_thread_func_ptr func_ptr, void* stack_buf, uint32_t stack_buf_capacity)
+static void sp0re_thread_init(sp0re_thread* thread, sp0re_thread_priority priority, sp0re_thread_func_ptr func_ptr, void* stack_buf, uint32_t stack_buf_capacity)
 {
     thread->priority = priority;
 
@@ -92,9 +92,9 @@ static void m0ss_thread_init(m0ss_thread* thread, m0ss_thread_priority priority,
     thread->sp = sp;
 }
 
-static void m0ss_init()
+static void sp0re_init()
 {
-    m0ss_thread_init(&thread_idle, M0SS_THREAD_PRIORITY_LOWEST, thread_idle_func, thread_idle_stack, THREAD_IDLE_STACK_CAPACITY);
+    sp0re_thread_init(&thread_idle, SP0RE_THREAD_PRIORITY_LOWEST, thread_idle_func, thread_idle_stack, THREAD_IDLE_STACK_CAPACITY);
 
     // Set PendSV and SysTick system handler priority to the lowest possible.
     *(volatile uint32_t*)SCB_SHPR3 |= SCB_SHPR3_PRI_14 | SCB_SHPR3_PRI_15;
@@ -104,10 +104,10 @@ static void m0ss_init()
     *(volatile uint32_t*)SYSTICK_CSR = SYSTICK_CSR_ENABLE | SYSTICK_CSR_TICKINT | SYSTICK_CSR_CLKSOURCE;
 }
 
-static void m0ss_tick()
+static void sp0re_tick()
 {
     for (uint8_t thread_index = 0; thread_index < thread_count; ++thread_index) {
-        m0ss_thread* thread = threads[thread_index];
+        sp0re_thread* thread = threads[thread_index];
 
         if (thread->ticks_to_block == 0) {
             continue;
@@ -194,46 +194,46 @@ void PendSV_Handler(void)
         "BX r0"
 
         : /* outputs */
-        : /* inputs */      [offsetof_sp] "i" (offsetof(m0ss_thread, sp))
+        : /* inputs */      [offsetof_sp] "i" (offsetof(sp0re_thread, sp))
         : /* clobbers */    "memory" // TODO: Add other clobbers?
     );
 }
 
 void SysTick_Handler()
 {
-    m0ss_tick();
+    sp0re_tick();
 
-    m0ss_schedule();
+    sp0re_schedule();
 }
 
-void m0ss_thread_create(m0ss_thread* thread, m0ss_thread_priority priority, m0ss_thread_func_ptr func_ptr, void* stack_buf, uint32_t stack_buf_capacity)
+void sp0re_thread_create(sp0re_thread* thread, sp0re_thread_priority priority, sp0re_thread_func_ptr func_ptr, void* stack_buf, uint32_t stack_buf_capacity)
 {
     // TODO: Add safety checks.
 
-    m0ss_thread_init(thread, priority, func_ptr, stack_buf, stack_buf_capacity);
+    sp0re_thread_init(thread, priority, func_ptr, stack_buf, stack_buf_capacity);
 
     threads[thread_count++] = thread;
 }
 
-void m0ss_start()
+void sp0re_start()
 {
-    m0ss_init();
+    sp0re_init();
 
-    m0ss_schedule();
+    sp0re_schedule();
 }
 
 // Note: Schedules the execution of the threads.
-void m0ss_schedule()
+void sp0re_schedule()
 {
     // Note: This is a critical section which accesses the scheduler state.
 
     uint32_t primask;
-    M0SS_ENTER_CRITICAL(primask);
+    SP0RE_ENTER_CRITICAL(primask);
 
     thread_to_run = NULL;
 
     for (uint8_t thread_index = 0; thread_index < thread_count; ++thread_index) {
-        m0ss_thread* thread = threads[thread_index];
+        sp0re_thread* thread = threads[thread_index];
 
         if (thread->ticks_to_block) {
             continue;
@@ -252,12 +252,12 @@ void m0ss_schedule()
         *(volatile uint32_t*)SCB_ICSR |= SCB_ICSR_PENDSVSET;
     }
 
-    M0SS_EXIT_CRITICAL(primask);
+    SP0RE_EXIT_CRITICAL(primask);
 }
 
-void m0ss_delay(uint32_t ticks)
+void sp0re_delay(uint32_t ticks)
 {
     thread_running->ticks_to_block = ticks;
 
-    m0ss_schedule();
+    sp0re_schedule();
 }

@@ -21,7 +21,7 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-#include "m0ss.h"
+#include "sp0re.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -59,18 +59,18 @@ void blink_thread_func()
     while (1) {
         HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_5);
 
-        m0ss_delay(250);
+        sp0re_delay(250);
     }
 }
 
 void uart_thread_func()
 {
-    const char* message = "Hello, m0ss!\n";
+    const char* message = "Hello, sp0re!\n";
 
     while (1) {
         HAL_UART_Transmit(&huart2, (uint8_t*)message, 13, HAL_MAX_DELAY);
 
-        m0ss_delay(1000);
+        sp0re_delay(1000);
     }
 }
 /* USER CODE END PFP */
@@ -114,13 +114,13 @@ int main(void)
   MX_GPIO_Init();
   MX_USART2_UART_Init();
   /* USER CODE BEGIN 2 */
-  m0ss_thread blink_thread;
-  m0ss_thread uart_thread;
+  sp0re_thread blink_thread;
+  sp0re_thread uart_thread;
 
-  m0ss_thread_create(&blink_thread, M0SS_THREAD_PRIORITY_LOWEST, blink_thread_func, blink_thread_stack_buf, BLINK_THREAD_STACK_BUF_CAPACITY);
-  m0ss_thread_create(&uart_thread, M0SS_THREAD_PRIORITY_LOWEST + 1, uart_thread_func, uart_thread_stack_buf, UART_THREAD_STACK_BUF_CAPACITY);
+  sp0re_thread_create(&blink_thread, SP0RE_THREAD_PRIORITY_LOWEST, blink_thread_func, blink_thread_stack_buf, BLINK_THREAD_STACK_BUF_CAPACITY);
+  sp0re_thread_create(&uart_thread, SP0RE_THREAD_PRIORITY_LOWEST + 1, uart_thread_func, uart_thread_stack_buf, UART_THREAD_STACK_BUF_CAPACITY);
 
-  m0ss_start();
+  sp0re_start();
   /* USER CODE END 2 */
 
   /* Infinite loop */
