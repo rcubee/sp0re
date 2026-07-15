@@ -24,6 +24,8 @@ _Static_assert((SYSTICK_RVR_RELOAD_VALUE >= 0x00000001U && SYSTICK_RVR_RELOAD_VA
 
 #define THREAD_IDLE_STACK_CAPACITY (1024U)
 
+static volatile sp0re_tick g_tick = 0U;
+
 static sp0re_thread* threads[SP0RE_CONF_MAX_THREAD_COUNT];
 static uint8_t thread_count;
 
@@ -38,7 +40,7 @@ static void thread_idle_func()
     while (1) {
         asm volatile("WFI");
 
-        sp0re_schedule();
+        sp0re_reschedule();
     }
 }
 
@@ -46,7 +48,7 @@ static void sp0re_thread_init(sp0re_thread* thread, sp0re_thread_priority priori
 {
     thread->priority = priority;
 
-    thread->ticks_to_block = 0U;
+    thread->tick_to_wake_at = 0U;
 
     /* Note:
      * In ARM Cortex M0/M0+:
@@ -104,16 +106,34 @@ static void sp0re_init()
     *(volatile uint32_t*)SYSTICK_CSR = SYSTICK_CSR_ENABLE | SYSTICK_CSR_TICKINT | SYSTICK_CSR_CLKSOURCE;
 }
 
-static void sp0re_tick()
+/* Note: Selects the thread to run.
+ * This function is meant to be called inside PendSV, not before it.
+ * The main purpose of enforcing this behavior reducing the number
+ * of times the schedulee algorithm runs in situations where multiple
+ * higher-priority interrupts use APIs which need to trigger the reschedule.
+ */
+__attribute__((used))
+static void sp0re_schedule()
 {
+    // Note: This section accesses scheduler shared state.
+
+    thread_to_run = NULL;
+
     for (uint8_t thread_index = 0; thread_index < thread_count; ++thread_index) {
         sp0re_thread* thread = threads[thread_index];
 
-        if (thread->ticks_to_block == 0) {
+        if (thread->tick_to_wake_at > g_tick) {
+            // Note: Thread shoud sleep.
             continue;
         }
 
-        --(thread->ticks_to_block);
+        if ((thread_to_run == NULL) || (thread->priority > thread_to_run->priority)) {
+            thread_to_run = thread;
+        }
+    }
+
+    if (thread_to_run == NULL) {
+        thread_to_run = &thread_idle;
     }
 }
 
@@ -125,7 +145,11 @@ void PendSV_Handler(void)
 
     asm volatile (
         // TODO: Use UAL.
+        // TODO: Modify the sequence so that only necessary parts of the context switch are inside critical section (does saving/restoring have to be?)
+        // TODO: Early exit on thread_to_run = thread_running.
         "CPSID i\n\t" // Disable interrupts
+
+        "BL sp0re_schedule\n\t" // Select the thread to run.
 
         /* if (thread_running) { */
         "LDR r0, =thread_running\n\t" // r0 holds &thread_running
@@ -201,9 +225,15 @@ void PendSV_Handler(void)
 
 void SysTick_Handler()
 {
-    sp0re_tick();
+    SP0RE_DISABLE_IRQ();
 
-    sp0re_schedule();
+    // Note: Access is not atomic
+    ++g_tick;
+
+    SP0RE_ENABLE_IRQ();
+
+    // TODO: Track the smallest tick_to_wake_at to reduce unnecessary reschedules.
+    sp0re_reschedule();
 }
 
 void sp0re_thread_create(sp0re_thread* thread, sp0re_thread_priority priority, sp0re_thread_func_ptr func_ptr, void* stack_buf, uint32_t stack_buf_capacity)
@@ -219,45 +249,59 @@ void sp0re_start()
 {
     sp0re_init();
 
-    sp0re_schedule();
+    sp0re_reschedule();
 }
 
-// Note: Schedules the execution of the threads.
-void sp0re_schedule()
+// Note: Triggers PendSV to schedule the execution of the threads.
+void sp0re_reschedule()
 {
-    // Note: This is a critical section which accesses the scheduler state.
+    *(volatile uint32_t*)SCB_ICSR |= SCB_ICSR_PENDSVSET;
+}
 
+sp0re_tick sp0re_get_tick()
+{
     uint32_t primask;
     SP0RE_ENTER_CRITICAL(primask);
 
-    thread_to_run = NULL;
-
-    for (uint8_t thread_index = 0; thread_index < thread_count; ++thread_index) {
-        sp0re_thread* thread = threads[thread_index];
-
-        if (thread->ticks_to_block) {
-            continue;
-        }
-
-        if ((thread_to_run == NULL) || (thread->priority > thread_to_run->priority)) {
-            thread_to_run = thread;
-        }
-    }
-
-    if (thread_to_run == NULL) {
-        thread_to_run = &thread_idle;
-    }
-
-    if (thread_to_run != thread_running) {
-        *(volatile uint32_t*)SCB_ICSR |= SCB_ICSR_PENDSVSET;
-    }
+    // Note: Access is not atomic.
+    sp0re_tick tick = g_tick;
 
     SP0RE_EXIT_CRITICAL(primask);
+
+    return tick;
 }
 
-void sp0re_delay(uint32_t ticks)
+void sp0re_sleep(sp0re_tick ticks)
 {
-    thread_running->ticks_to_block = ticks;
+    sp0re_sleep_until(sp0re_get_tick() + ticks);
+}
 
-    sp0re_schedule();
+void sp0re_sleep_until(sp0re_tick tick)
+{
+    uint32_t primask;
+    SP0RE_ENTER_CRITICAL(primask);
+
+    // Note: Access is not atomic.
+    thread_running->tick_to_wake_at = tick;
+
+    SP0RE_EXIT_CRITICAL(primask);
+
+    // Note: Schedule another thread to run
+    sp0re_reschedule();
+}
+
+void sp0re_wake(sp0re_thread* thread)
+{
+    uint32_t primask;
+    SP0RE_ENTER_CRITICAL(primask);
+
+    // Note: Access is not atomic.
+    thread->tick_to_wake_at = g_tick;
+
+    SP0RE_EXIT_CRITICAL(primask);
+
+    // Note: If the waken thread has higher priority, reschedule
+    if (thread->priority > thread_running->priority) {
+        sp0re_reschedule();
+    }
 }

@@ -59,7 +59,7 @@ void blink_thread_func()
     while (1) {
         HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_5);
 
-        sp0re_delay(250);
+        sp0re_sleep(250);
     }
 }
 
@@ -70,7 +70,7 @@ void uart_thread_func()
     while (1) {
         HAL_UART_Transmit(&huart2, (uint8_t*)message, 14, HAL_MAX_DELAY);
 
-        sp0re_delay(1000);
+        sp0re_sleep(1000);
     }
 }
 /* USER CODE END PFP */
