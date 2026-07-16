@@ -52,11 +52,18 @@ typedef struct
     bool blocking_object_acquired;
 } sp0re_thread;
 
+// Note: A thread can only wait on 1 semaphore/mutex
 typedef struct
 {
     uint8_t count;
     uint8_t count_max;
 } sp0re_semaphore;
+
+typedef struct
+{
+    volatile sp0re_thread* owner;
+    sp0re_thread_priority owner_base_priority;
+} sp0re_mutex;
 
 void sp0re_thread_create(sp0re_thread* thread, sp0re_thread_priority priority, sp0re_thread_func_ptr func_ptr, void* stack_buf, uint32_t stack_buf_capacity);
 
@@ -77,5 +84,11 @@ void sp0re_semaphore_create(sp0re_semaphore* semaphore, uint8_t max_count);
 sp0re_error sp0re_semaphore_wait(sp0re_semaphore* semaphore, sp0re_tick ticks);
 
 void sp0re_semaphore_signal(sp0re_semaphore* semaphore);
+
+void sp0re_mutex_create(sp0re_mutex* mutex);
+
+sp0re_error sp0re_mutex_lock(sp0re_mutex* mutex, sp0re_tick ticks);
+
+void sp0re_mutex_unlock(sp0re_mutex* mutex);
 
 #endif // SP0RE_H
