@@ -46,10 +46,6 @@ static void thread_idle_func()
 
 static void sp0re_thread_init(sp0re_thread* thread, sp0re_thread_priority priority, sp0re_thread_func_ptr func_ptr, void* stack_buf, uint32_t stack_buf_capacity)
 {
-    thread->priority = priority;
-
-    thread->tick_to_wake_at = 0U;
-
     /* Note:
      * In ARM Cortex M0/M0+:
      * 1. The stack grows downward (full-descending allocation model)
@@ -92,6 +88,12 @@ static void sp0re_thread_init(sp0re_thread* thread, sp0re_thread_priority priori
     *(--sp) = 0x00000004U; // R4
 
     thread->sp = sp;
+
+    thread->priority = priority;
+
+    thread->tick_to_wake_at = 0U;
+
+    thread->blocking_object = NULL;
 }
 
 static void sp0re_init()
@@ -230,6 +232,19 @@ void SysTick_Handler()
     // Note: Access is not atomic
     ++g_tick;
 
+    // Note: Handle timeouts.
+    for (uint8_t thread_index = 0; thread_index < thread_count; ++thread_index) {
+        sp0re_thread* thread = threads[thread_index];
+
+        if (thread->tick_to_wake_at > g_tick) {
+            continue;
+        }
+
+        if (thread->blocking_object != NULL) {
+            thread->blocking_object = NULL;
+        }
+    }
+
     SP0RE_ENABLE_IRQ();
 
     // TODO: Track the smallest tick_to_wake_at to reduce unnecessary reschedules.
@@ -290,6 +305,7 @@ void sp0re_sleep_until(sp0re_tick tick)
     sp0re_reschedule();
 }
 
+// TODO: What should be done if thread is blocked waiting for an object?
 void sp0re_wake(sp0re_thread* thread)
 {
     uint32_t primask;
@@ -302,6 +318,73 @@ void sp0re_wake(sp0re_thread* thread)
 
     // Note: If the waken thread has higher priority, reschedule
     if (thread->priority > thread_running->priority) {
+        sp0re_reschedule();
+    }
+}
+
+void sp0re_semaphore_create(sp0re_semaphore* semaphore, uint8_t max_count)
+{
+    semaphore->count = 0U;
+    semaphore->count_max = max_count;
+}
+
+sp0re_error sp0re_semaphore_wait(sp0re_semaphore* semaphore, sp0re_tick ticks)
+{
+    uint32_t primask;
+    SP0RE_ENTER_CRITICAL(primask);
+
+    if (semaphore->count) {
+        --semaphore->count;
+
+        SP0RE_EXIT_CRITICAL(primask);
+
+        return SP0RE_OK;
+    }
+
+    thread_running->tick_to_wake_at = g_tick + ticks;
+    thread_running->blocking_object = semaphore;
+    thread_running->blocking_object_acquired = false;
+
+    SP0RE_EXIT_CRITICAL(primask);
+
+    // Note: Wait for the signal or timeout.
+    sp0re_reschedule();
+
+    return thread_running->blocking_object_acquired ? SP0RE_OK : SP0RE_ERROR_TIMEOUT;
+}
+
+void sp0re_semaphore_signal(sp0re_semaphore* semaphore)
+{
+    uint32_t primask;
+    SP0RE_ENTER_CRITICAL(primask);
+
+    sp0re_thread* thread_to_wake = NULL;
+
+    for (uint8_t thread_index = 0U; thread_index < thread_count; ++thread_index) {
+        sp0re_thread* thread = threads[thread_index];
+
+        if (thread->blocking_object != semaphore) {
+            // Note: The thread is not sleeping on the semaphore.
+            continue;
+        }
+
+        if ((thread_to_wake == NULL) || (thread->priority > thread_to_wake->priority)) {
+            thread_to_wake = thread;
+        }
+    }
+
+    if (thread_to_wake) {
+        thread_to_wake->tick_to_wake_at = g_tick;
+        thread_to_wake->blocking_object = NULL;
+        thread_to_wake->blocking_object_acquired = true;
+    }
+    else if (semaphore->count < semaphore->count_max) {
+        ++semaphore->count;
+    }
+
+    SP0RE_EXIT_CRITICAL(primask);
+
+    if (thread_to_wake && (thread_to_wake->priority > thread_running->priority)) {
         sp0re_reschedule();
     }
 }
