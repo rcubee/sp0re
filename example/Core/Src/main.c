@@ -31,8 +31,11 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define BLINK_THREAD_STACK_BUF_CAPACITY 1024
-#define UART_THREAD_STACK_BUF_CAPACITY 1024
+#define BLINK_THREAD_STACK_BUF_CAPACITY 1024U
+#define FOO_THREAD_STACK_BUF_CAPACITY 1024U
+#define BAR_THREAD_STACK_BUF_CAPACITY 1024U
+
+#define RX_BUFFER_SIZE 64U
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -46,7 +49,10 @@ UART_HandleTypeDef huart2;
 
 /* USER CODE BEGIN PV */
 _Alignas(8) static uint8_t blink_thread_stack_buf[BLINK_THREAD_STACK_BUF_CAPACITY];
-_Alignas(8) static uint8_t uart_thread_stack_buf[UART_THREAD_STACK_BUF_CAPACITY];
+_Alignas(8) static uint8_t foo_thread_stack_buf[FOO_THREAD_STACK_BUF_CAPACITY];
+_Alignas(8) static uint8_t bar_thread_stack_buf[BAR_THREAD_STACK_BUF_CAPACITY];
+
+static sp0re_mutex uart_mutex;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -54,6 +60,16 @@ void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_USART2_UART_Init(void);
 /* USER CODE BEGIN PFP */
+
+/* USER CODE END PFP */
+
+/* Private user code ---------------------------------------------------------*/
+/* USER CODE BEGIN 0 */
+// Note: Let the RTOS configure the SysTick.
+HAL_StatusTypeDef HAL_InitTick(uint32_t TickPriority) {
+    return HAL_OK;
+}
+
 void blink_thread_func()
 {
     while (1) {
@@ -63,23 +79,36 @@ void blink_thread_func()
     }
 }
 
-void uart_thread_func()
+void foo_thread_func()
 {
-    const char* message = "Hello, sp0re!\n";
+    const char* message = "Foo\n";
 
     while (1) {
-        HAL_UART_Transmit(&huart2, (uint8_t*)message, 14, HAL_MAX_DELAY);
+        sp0re_mutex_lock(&uart_mutex, SP0RE_TICK_MAX);
 
-        sp0re_sleep(1000);
+        HAL_UART_Transmit(&huart2, (uint8_t*)message, 4, HAL_MAX_DELAY);
+        sp0re_sleep(700);
+
+        sp0re_mutex_unlock(&uart_mutex);
+
+        sp0re_sleep(300);
     }
 }
-/* USER CODE END PFP */
 
-/* Private user code ---------------------------------------------------------*/
-/* USER CODE BEGIN 0 */
-// Note: Let the RTOS configure the SysTick.
-HAL_StatusTypeDef HAL_InitTick(uint32_t TickPriority) {
-    return HAL_OK;
+void bar_thread_func()
+{
+    const char* message = "Bar\n";
+
+    while (1) {
+        sp0re_mutex_lock(&uart_mutex, SP0RE_TICK_MAX);
+
+        HAL_UART_Transmit(&huart2, (uint8_t*)message, 4, HAL_MAX_DELAY);
+        sp0re_sleep(300);
+
+        sp0re_mutex_unlock(&uart_mutex);
+
+        sp0re_sleep(500);
+    }
 }
 /* USER CODE END 0 */
 
@@ -115,10 +144,14 @@ int main(void)
   MX_USART2_UART_Init();
   /* USER CODE BEGIN 2 */
   sp0re_thread blink_thread;
-  sp0re_thread uart_thread;
+  sp0re_thread foo_thread;
+  sp0re_thread bar_thread;
+
+  sp0re_mutex_create(&uart_mutex);
 
   sp0re_thread_create(&blink_thread, SP0RE_THREAD_PRIORITY_LOWEST, blink_thread_func, blink_thread_stack_buf, BLINK_THREAD_STACK_BUF_CAPACITY);
-  sp0re_thread_create(&uart_thread, SP0RE_THREAD_PRIORITY_LOWEST + 1, uart_thread_func, uart_thread_stack_buf, UART_THREAD_STACK_BUF_CAPACITY);
+  sp0re_thread_create(&foo_thread, SP0RE_THREAD_PRIORITY_LOWEST + 1, foo_thread_func, foo_thread_stack_buf, FOO_THREAD_STACK_BUF_CAPACITY);
+  sp0re_thread_create(&bar_thread, SP0RE_THREAD_PRIORITY_LOWEST + 2, bar_thread_func, bar_thread_stack_buf, BAR_THREAD_STACK_BUF_CAPACITY);
 
   sp0re_start();
   /* USER CODE END 2 */
