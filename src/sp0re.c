@@ -22,7 +22,7 @@ _Static_assert((SYSTICK_RVR_RELOAD_VALUE >= 0x00000001U && SYSTICK_RVR_RELOAD_VA
 
 #define SYSTICK_CVR 0xE000E018U
 
-#define THREAD_IDLE_STACK_CAPACITY (1024U)
+#define THREAD_IDLE_STACK_CAPACITY (128U)
 
 static volatile sp0re_tick g_tick = 0U;
 
@@ -35,6 +35,7 @@ static sp0re_thread* volatile thread_to_run;
 static sp0re_thread thread_idle;
 _Alignas(8) static uint8_t thread_idle_stack[THREAD_IDLE_STACK_CAPACITY];
 
+// TODO: Make naked?
 static void thread_idle_func()
 {
     while (1) {
@@ -137,6 +138,27 @@ static void sp0re_schedule()
     if (thread_to_run == NULL) {
         thread_to_run = &thread_idle;
     }
+}
+
+// Note: Get the thread with the highest priority blocking on a object.
+static sp0re_thread* sp0re_get_highest_priority_waiter(void* blocking_object)
+{
+    sp0re_thread* highest_priority_waiter = NULL;
+
+    for (uint8_t thread_index = 0U; thread_index < thread_count; ++thread_index) {
+        sp0re_thread* thread = threads[thread_index];
+
+        if (thread->blocking_object != blocking_object) {
+            continue;
+        }
+
+        if ((highest_priority_waiter == NULL) ||
+            (thread->priority > highest_priority_waiter->priority)) {
+            highest_priority_waiter = thread;
+        }
+    }
+
+    return highest_priority_waiter;
 }
 
 // Note: Performs the context switch.
@@ -363,20 +385,7 @@ void sp0re_semaphore_signal(sp0re_semaphore* semaphore)
     uint32_t primask;
     SP0RE_ENTER_CRITICAL(primask);
 
-    sp0re_thread* thread_to_wake = NULL;
-
-    for (uint8_t thread_index = 0U; thread_index < thread_count; ++thread_index) {
-        sp0re_thread* thread = threads[thread_index];
-
-        if (thread->blocking_object != semaphore) {
-            // Note: The thread is not sleeping on the semaphore.
-            continue;
-        }
-
-        if ((thread_to_wake == NULL) || (thread->priority > thread_to_wake->priority)) {
-            thread_to_wake = thread;
-        }
-    }
+    sp0re_thread* thread_to_wake = sp0re_get_highest_priority_waiter(semaphore);
 
     if (thread_to_wake) {
         thread_to_wake->tick_to_wake_at = g_tick;
@@ -447,37 +456,24 @@ void sp0re_mutex_unlock(sp0re_mutex* mutex)
     // Note: Thread's priority could have been inherited even if no waiter was found (due to their timeout on lock).
     thread_running->priority = mutex->owner_base_priority;
 
-    sp0re_thread* highest_priority_waiter = NULL;
+    sp0re_thread* thread_to_wake = sp0re_get_highest_priority_waiter(mutex);
 
-    for (uint8_t thread_index = 0U; thread_index < thread_count; ++thread_index) {
-        sp0re_thread* thread = threads[thread_index];
-
-        if (thread->blocking_object != mutex) {
-            // Note: The thread is not sleeping on the mutex.
-            continue;
-        }
-
-        if ((highest_priority_waiter == NULL) || (thread->priority > highest_priority_waiter->priority)) {
-            highest_priority_waiter = thread;
-        }
-    }
-
-    if (highest_priority_waiter == NULL) {
+    if (thread_to_wake == NULL) {
         mutex->owner = NULL;
         mutex->owner_base_priority = SP0RE_THREAD_PRIORITY_LOWEST;
 
         SP0RE_EXIT_CRITICAL(primask);
 
-        // TODO: Reschedule on lowering priority?
+        // TODO: Reschedule on lowering priority of the current thread releasing mutex?
 
         return;
     }
 
-    mutex->owner = highest_priority_waiter;
-    mutex->owner_base_priority = highest_priority_waiter->priority;
+    mutex->owner = thread_to_wake;
+    mutex->owner_base_priority = thread_to_wake->priority;
 
-    highest_priority_waiter->tick_to_wake_at = g_tick;
-    highest_priority_waiter->blocking_object = NULL;
+    thread_to_wake->tick_to_wake_at = g_tick;
+    thread_to_wake->blocking_object = NULL;
 
     SP0RE_EXIT_CRITICAL(primask);
 
