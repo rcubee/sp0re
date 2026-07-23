@@ -32,7 +32,7 @@ _Alignas(8) static uint8_t idle_thread_stack[SP0RE_CONF_IDLE_THREAD_STACK_CAPACI
 #ifdef SP0RE_USING_DEFAULT_IDLE_THREAD_FUNC
 // Note: Definition of default idle thread function.
 __attribute__((naked))
-static void sp0re_default_idle_thread_func()
+static void sp0re_default_idle_thread_func(void*)
 {
     asm volatile(
         "thread_idle_func_loop:\n\t"
@@ -42,10 +42,17 @@ static void sp0re_default_idle_thread_func()
 }
 #else
 // Note: Forward declaration of the user-provided idle thread function.
-void SP0RE_CONF_IDLE_THREAD_FUNC(void);
+void SP0RE_CONF_IDLE_THREAD_FUNC(void*);
 #endif // SP0RE_USING_DEFAULT_IDLE_THREAD_FUNC
 
-static void sp0re_thread_init(sp0re_thread* thread, sp0re_thread_priority priority, sp0re_thread_func_ptr func_ptr, void* stack_buf, uint32_t stack_buf_capacity)
+static void sp0re_thread_init(
+    sp0re_thread* thread,
+    sp0re_thread_priority priority,
+    sp0re_thread_func_ptr func_ptr,
+    void* func_arg,
+    void* stack_buf,
+    uint32_t stack_buf_capacity
+)
 {
     SP0RE_ASSERT(thread != NULL);
     SP0RE_ASSERT(func_ptr != NULL);
@@ -53,7 +60,7 @@ static void sp0re_thread_init(sp0re_thread* thread, sp0re_thread_priority priori
     SP0RE_ASSERT(stack_buf_capacity > 0U); // TODO: Calculate the minimal stack buffer capacity which makes sense.
 
     /* Note:
-     * In ARM Cortex M0/M0+:
+     * In ARM Cortex-M0/M0+:
      * 1. The stack grows downward (full-descending allocation model)
      * 2. Pushing stores the register value at the newly decremented address (SP - 4)
      */
@@ -81,7 +88,7 @@ static void sp0re_thread_init(sp0re_thread* thread, sp0re_thread_priority priori
     *(--sp) = 0x00000003U; // R3
     *(--sp) = 0x00000002U; // R2
     *(--sp) = 0x00000001U; // R1
-    *(--sp) = 0x00000000U; // R0
+    *(--sp) = (uint32_t)func_arg; // R0 (AAPCS states that the first function argument should be put into R0)
 
     /* These registers are NOT pushed by hardware on exception entry. */
     *(--sp) = 0x0000000BU; // R11
@@ -104,7 +111,14 @@ static void sp0re_thread_init(sp0re_thread* thread, sp0re_thread_priority priori
 
 static void sp0re_init()
 {
-    sp0re_thread_init(&idle_thread, SP0RE_THREAD_PRIORITY_LOWEST, SP0RE_CONF_IDLE_THREAD_FUNC, idle_thread_stack, SP0RE_CONF_IDLE_THREAD_STACK_CAPACITY);
+    sp0re_thread_init(
+        &idle_thread,
+        SP0RE_THREAD_PRIORITY_LOWEST,
+        SP0RE_CONF_IDLE_THREAD_FUNC,
+        NULL,
+        idle_thread_stack,
+        SP0RE_CONF_IDLE_THREAD_STACK_CAPACITY
+    );
 
     // Set PendSV and SysTick system handler priority to the lowest possible.
     *(volatile uint32_t*)SCB_SHPR3 |= SCB_SHPR3_PRI_14 | SCB_SHPR3_PRI_15;
@@ -278,11 +292,25 @@ void SysTick_Handler()
     sp0re_reschedule();
 }
 
-void sp0re_thread_create(sp0re_thread* thread, sp0re_thread_priority priority, sp0re_thread_func_ptr func_ptr, void* stack_buf, uint32_t stack_buf_capacity)
+void sp0re_thread_create(
+    sp0re_thread* thread,
+    sp0re_thread_priority priority,
+    sp0re_thread_func_ptr func_ptr,
+    void* func_arg,
+    void* stack_buf,
+    uint32_t stack_buf_capacity
+)
 {
     SP0RE_ASSERT(thread_count < SP0RE_CONF_MAX_THREAD_COUNT);
 
-    sp0re_thread_init(thread, priority, func_ptr, stack_buf, stack_buf_capacity);
+    sp0re_thread_init(
+        thread,
+        priority,
+        func_ptr,
+        func_arg,
+        stack_buf,
+        stack_buf_capacity
+    );
 
     threads[thread_count++] = thread;
 }

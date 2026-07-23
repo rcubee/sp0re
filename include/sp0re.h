@@ -31,7 +31,7 @@
 
 typedef uint64_t sp0re_tick;
 
-typedef void* sp0re_thread_func_ptr;
+typedef void (*sp0re_thread_func_ptr)(void*);
 
 typedef uint8_t sp0re_thread_priority;
 
@@ -66,7 +66,14 @@ typedef struct
     sp0re_thread_priority owner_base_priority;
 } sp0re_mutex;
 
-void sp0re_thread_create(sp0re_thread* thread, sp0re_thread_priority priority, sp0re_thread_func_ptr func_ptr, void* stack_buf, uint32_t stack_buf_capacity);
+void sp0re_thread_create(
+    sp0re_thread* thread,
+    sp0re_thread_priority priority,
+    sp0re_thread_func_ptr func_ptr,
+    void* func_arg,
+    void* stack_buf,
+    uint32_t stack_buf_capacity
+);
 
 void sp0re_start();
 
