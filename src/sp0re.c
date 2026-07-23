@@ -327,7 +327,6 @@ void sp0re_sleep_until(sp0re_tick tick)
     sp0re_reschedule();
 }
 
-// TODO: What should be done if thread is blocked waiting for an object?
 void sp0re_wake(sp0re_thread* thread)
 {
     uint32_t primask;
@@ -335,6 +334,9 @@ void sp0re_wake(sp0re_thread* thread)
 
     // Note: Access is not atomic.
     thread->tick_to_wake_at = g_tick;
+
+    // Note: Stop blocking on an object (if the thread is).
+    thread->blocking_object = NULL;
 
     SP0RE_EXIT_CRITICAL(primask);
 
