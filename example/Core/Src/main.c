@@ -77,7 +77,7 @@ void assert_handler(const char* file_and_line)
         ;
 }
 
-void idle_thread_func()
+void idle_thread_func(void*)
 {
     int counter = 0;
 
@@ -95,14 +95,12 @@ void idle_thread_func()
     }
 }
 
-void foo_thread_func()
+void foo_thread_func(void* message)
 {
-    const char* message = "Foo\n";
-
     while (1) {
         sp0re_mutex_lock(&uart_mutex, SP0RE_TICK_MAX);
 
-        HAL_UART_Transmit(&huart2, (uint8_t*)message, 4, HAL_MAX_DELAY);
+        HAL_UART_Transmit(&huart2, (uint8_t*)message, strlen((char*)message), HAL_MAX_DELAY);
         sp0re_sleep(700);
 
         sp0re_mutex_unlock(&uart_mutex);
@@ -111,14 +109,12 @@ void foo_thread_func()
     }
 }
 
-void bar_thread_func()
+void bar_thread_func(void* message)
 {
-    const char* message = "Bar\n";
-
     while (1) {
         sp0re_mutex_lock(&uart_mutex, SP0RE_TICK_MAX);
 
-        HAL_UART_Transmit(&huart2, (uint8_t*)message, 4, HAL_MAX_DELAY);
+        HAL_UART_Transmit(&huart2, (uint8_t*)message, strlen((char*)message), HAL_MAX_DELAY);
         sp0re_sleep(300);
 
         sp0re_mutex_unlock(&uart_mutex);
@@ -164,8 +160,25 @@ int main(void)
 
   sp0re_mutex_create(&uart_mutex);
 
-  sp0re_thread_create(&foo_thread, SP0RE_THREAD_PRIORITY_LOWEST + 1, foo_thread_func, foo_thread_stack_buf, FOO_THREAD_STACK_BUF_CAPACITY);
-  sp0re_thread_create(&bar_thread, SP0RE_THREAD_PRIORITY_LOWEST + 2, bar_thread_func, bar_thread_stack_buf, BAR_THREAD_STACK_BUF_CAPACITY);
+  const char* foo_message = "Foo\n";
+  sp0re_thread_create(
+      &foo_thread,
+      SP0RE_THREAD_PRIORITY_LOWEST + 1,
+      foo_thread_func,
+      (void*)foo_message,
+      foo_thread_stack_buf,
+      FOO_THREAD_STACK_BUF_CAPACITY
+  );
+
+  const char* bar_message = "Bar\n";
+  sp0re_thread_create(
+      &bar_thread,
+      SP0RE_THREAD_PRIORITY_LOWEST + 2,
+      bar_thread_func,
+      (void*)bar_message,
+      bar_thread_stack_buf,
+      BAR_THREAD_STACK_BUF_CAPACITY
+  );
 
   sp0re_start();
   /* USER CODE END 2 */
