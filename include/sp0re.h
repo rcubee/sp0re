@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include "sp0re_conf_internal.h"
 
 #define SP0RE_TICK_MAX UINT64_MAX
 

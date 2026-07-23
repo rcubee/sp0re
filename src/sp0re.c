@@ -1,5 +1,4 @@
 #include "sp0re.h"
-#include "sp0re_conf.h"
 #include <stddef.h>
 
 #define SCB_ICSR            0xE000ED04U
@@ -22,8 +21,6 @@ _Static_assert((SYSTICK_RVR_RELOAD_VALUE >= 0x00000001U && SYSTICK_RVR_RELOAD_VA
 
 #define SYSTICK_CVR 0xE000E018U
 
-#define THREAD_IDLE_STACK_CAPACITY (128U)
-
 static volatile sp0re_tick g_tick = 0U;
 
 static sp0re_thread* threads[SP0RE_CONF_MAX_THREAD_COUNT];
@@ -32,18 +29,24 @@ static uint8_t thread_count;
 static sp0re_thread* volatile thread_running;
 static sp0re_thread* volatile thread_to_run;
 
-static sp0re_thread thread_idle;
-_Alignas(8) static uint8_t thread_idle_stack[THREAD_IDLE_STACK_CAPACITY];
+static sp0re_thread idle_thread;
+_Alignas(8) static uint8_t idle_thread_stack[SP0RE_CONF_IDLE_THREAD_STACK_CAPACITY];
 
-// TODO: Make naked?
-static void thread_idle_func()
+#ifdef SP0RE_USING_DEFAULT_IDLE_THREAD_FUNC
+// Note: Definition of default idle thread function.
+__attribute__((naked))
+static void sp0re_default_idle_thread_func()
 {
-    while (1) {
-        asm volatile("WFI");
-
-        sp0re_reschedule();
-    }
+    asm volatile(
+        "thread_idle_func_loop:\n\t"
+        "WFI\n\t"
+        "B thread_idle_func_loop\n\t"
+    );
 }
+#else
+// Note: Forward declaration of the user-provided idle thread function.
+void SP0RE_CONF_IDLE_THREAD_FUNC(void);
+#endif // SP0RE_USING_DEFAULT_IDLE_THREAD_FUNC
 
 static void sp0re_thread_init(sp0re_thread* thread, sp0re_thread_priority priority, sp0re_thread_func_ptr func_ptr, void* stack_buf, uint32_t stack_buf_capacity)
 {
@@ -99,7 +102,7 @@ static void sp0re_thread_init(sp0re_thread* thread, sp0re_thread_priority priori
 
 static void sp0re_init()
 {
-    sp0re_thread_init(&thread_idle, SP0RE_THREAD_PRIORITY_LOWEST, thread_idle_func, thread_idle_stack, THREAD_IDLE_STACK_CAPACITY);
+    sp0re_thread_init(&idle_thread, SP0RE_THREAD_PRIORITY_LOWEST, SP0RE_CONF_IDLE_THREAD_FUNC, idle_thread_stack, SP0RE_CONF_IDLE_THREAD_STACK_CAPACITY);
 
     // Set PendSV and SysTick system handler priority to the lowest possible.
     *(volatile uint32_t*)SCB_SHPR3 |= SCB_SHPR3_PRI_14 | SCB_SHPR3_PRI_15;
@@ -136,7 +139,7 @@ static void sp0re_schedule()
     }
 
     if (thread_to_run == NULL) {
-        thread_to_run = &thread_idle;
+        thread_to_run = &idle_thread;
     }
 }
 
