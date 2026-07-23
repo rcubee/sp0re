@@ -47,6 +47,11 @@ void SP0RE_CONF_IDLE_THREAD_FUNC(void);
 
 static void sp0re_thread_init(sp0re_thread* thread, sp0re_thread_priority priority, sp0re_thread_func_ptr func_ptr, void* stack_buf, uint32_t stack_buf_capacity)
 {
+    SP0RE_ASSERT(thread != NULL);
+    SP0RE_ASSERT(func_ptr != NULL);
+    SP0RE_ASSERT(stack_buf != NULL);
+    SP0RE_ASSERT(stack_buf_capacity > 0U); // TODO: Calculate the minimal stack buffer capacity which makes sense.
+
     /* Note:
      * In ARM Cortex M0/M0+:
      * 1. The stack grows downward (full-descending allocation model)
@@ -275,7 +280,7 @@ void SysTick_Handler()
 
 void sp0re_thread_create(sp0re_thread* thread, sp0re_thread_priority priority, sp0re_thread_func_ptr func_ptr, void* stack_buf, uint32_t stack_buf_capacity)
 {
-    // TODO: Add safety checks.
+    SP0RE_ASSERT(thread_count < SP0RE_CONF_MAX_THREAD_COUNT);
 
     sp0re_thread_init(thread, priority, func_ptr, stack_buf, stack_buf_capacity);
 
@@ -329,6 +334,8 @@ void sp0re_sleep_until(sp0re_tick tick)
 
 void sp0re_wake(sp0re_thread* thread)
 {
+    SP0RE_ASSERT(thread != NULL);
+
     uint32_t primask;
     SP0RE_ENTER_CRITICAL(primask);
 
@@ -348,12 +355,16 @@ void sp0re_wake(sp0re_thread* thread)
 
 void sp0re_semaphore_create(sp0re_semaphore* semaphore, uint8_t max_count)
 {
+    SP0RE_ASSERT(semaphore != NULL);
+
     semaphore->count = 0U;
     semaphore->count_max = max_count;
 }
 
 sp0re_error sp0re_semaphore_wait(sp0re_semaphore* semaphore, sp0re_tick ticks)
 {
+    SP0RE_ASSERT(semaphore != NULL);
+
     uint32_t primask;
     SP0RE_ENTER_CRITICAL(primask);
 
@@ -407,13 +418,15 @@ void sp0re_semaphore_signal(sp0re_semaphore* semaphore)
 
 void sp0re_mutex_create(sp0re_mutex* mutex)
 {
+    SP0RE_ASSERT(mutex != NULL);
+
     mutex->owner = NULL;
     mutex->owner_base_priority = SP0RE_THREAD_PRIORITY_LOWEST;
 }
 
 sp0re_error sp0re_mutex_lock(sp0re_mutex* mutex, sp0re_tick ticks)
 {
-    // TODO: Add double lock safety checks.
+    SP0RE_ASSERT(mutex != NULL);
 
     uint32_t primask;
     SP0RE_ENTER_CRITICAL(primask);
@@ -450,7 +463,8 @@ sp0re_error sp0re_mutex_lock(sp0re_mutex* mutex, sp0re_tick ticks)
 
 void sp0re_mutex_unlock(sp0re_mutex* mutex)
 {
-    // TODO: Add double unlock safety checks.
+    SP0RE_ASSERT(mutex);
+    SP0RE_ASSERT(mutex->owner == thread_running);
 
     uint32_t primask;
     SP0RE_ENTER_CRITICAL(primask);
