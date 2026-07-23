@@ -22,6 +22,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "sp0re.h"
+#include <string.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -66,6 +67,14 @@ static void MX_USART2_UART_Init(void);
 // Note: Let the RTOS configure the SysTick.
 HAL_StatusTypeDef HAL_InitTick(uint32_t TickPriority) {
     return HAL_OK;
+}
+
+void assert_handler(const char* file_and_line)
+{
+    HAL_UART_Transmit(&huart2, (uint8_t*)file_and_line, strlen(file_and_line), HAL_MAX_DELAY);
+
+    while (1)
+        ;
 }
 
 void idle_thread_func()
