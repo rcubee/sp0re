@@ -31,7 +31,6 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define BLINK_THREAD_STACK_BUF_CAPACITY 1024U
 #define FOO_THREAD_STACK_BUF_CAPACITY 1024U
 #define BAR_THREAD_STACK_BUF_CAPACITY 1024U
 
@@ -48,7 +47,6 @@
 UART_HandleTypeDef huart2;
 
 /* USER CODE BEGIN PV */
-_Alignas(8) static uint8_t blink_thread_stack_buf[BLINK_THREAD_STACK_BUF_CAPACITY];
 _Alignas(8) static uint8_t foo_thread_stack_buf[FOO_THREAD_STACK_BUF_CAPACITY];
 _Alignas(8) static uint8_t bar_thread_stack_buf[BAR_THREAD_STACK_BUF_CAPACITY];
 
@@ -70,12 +68,21 @@ HAL_StatusTypeDef HAL_InitTick(uint32_t TickPriority) {
     return HAL_OK;
 }
 
-void blink_thread_func()
+void idle_thread_func()
 {
-    while (1) {
-        HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_5);
+    int counter = 0;
 
-        sp0re_sleep(250);
+    while (1) {
+        asm volatile("WFI");
+
+        ++counter;
+
+        if (counter == 250) {
+            // Note: Toggle LED each ~250 ticks.
+            HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_5);
+
+            counter = 0;
+        }
     }
 }
 
@@ -143,13 +150,11 @@ int main(void)
   MX_GPIO_Init();
   MX_USART2_UART_Init();
   /* USER CODE BEGIN 2 */
-  sp0re_thread blink_thread;
   sp0re_thread foo_thread;
   sp0re_thread bar_thread;
 
   sp0re_mutex_create(&uart_mutex);
 
-  sp0re_thread_create(&blink_thread, SP0RE_THREAD_PRIORITY_LOWEST, blink_thread_func, blink_thread_stack_buf, BLINK_THREAD_STACK_BUF_CAPACITY);
   sp0re_thread_create(&foo_thread, SP0RE_THREAD_PRIORITY_LOWEST + 1, foo_thread_func, foo_thread_stack_buf, FOO_THREAD_STACK_BUF_CAPACITY);
   sp0re_thread_create(&bar_thread, SP0RE_THREAD_PRIORITY_LOWEST + 2, bar_thread_func, bar_thread_stack_buf, BAR_THREAD_STACK_BUF_CAPACITY);
 
