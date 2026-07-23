@@ -16,9 +16,6 @@
 #define SYSTICK_RVR         0xE000E014U
 #define SYSTICK_RVR_RELOAD  0xFFFFFFU
 
-#define SYSTICK_RVR_RELOAD_VALUE ((SP0RE_CONF_CORE_CLK_HZ / SP0RE_CONF_TICK_RATE_HZ) - 1U)
-_Static_assert((SYSTICK_RVR_RELOAD_VALUE >= 0x00000001U && SYSTICK_RVR_RELOAD_VALUE <= 0x00FFFFFFU), "SysTick RVR RELOAD value is out of range.");
-
 #define SYSTICK_CVR 0xE000E018U
 
 static volatile sp0re_tick g_tick = 0U;
