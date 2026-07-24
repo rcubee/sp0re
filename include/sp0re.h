@@ -41,30 +41,36 @@ typedef enum
     SP0RE_ERROR_TIMEOUT
 } sp0re_error;
 
+typedef struct sp0re_mutex sp0re_mutex;
+
 typedef struct
 {
     void* sp;
 
-    sp0re_thread_priority priority;
+    sp0re_thread_priority base_priority;
+    sp0re_thread_priority priority; // TODO: Make volatile as it can change elsewhere?
 
     sp0re_tick tick_to_wake_at;
 
-    void* blocking_object;
-    bool blocking_object_acquired;
+    void* blocking_object; // A pointer to an object (semaphore/mutex) on which the thread is blocked. The thread can be blocked only one object at a time.
+    bool semaphore_acquired; // A flag used to check if semaphore was signaled or timeout occured.
+
+    sp0re_mutex* owned_mutexes; // A singly linked list of owned mutexes.
 } sp0re_thread;
 
-// Note: A thread can only wait on 1 semaphore/mutex
 typedef struct
 {
     uint8_t count;
     uint8_t count_max;
 } sp0re_semaphore;
 
-typedef struct
+// Note: A single thread can lock multiple mutexes simultaneously.
+struct sp0re_mutex
 {
-    volatile sp0re_thread* owner;
-    sp0re_thread_priority owner_base_priority;
-} sp0re_mutex;
+    sp0re_mutex* next; // Pointer to the next mutex in the list.
+    volatile sp0re_thread* owner; // Pointer to the owner thread.
+    sp0re_thread_priority inherited_priority; // Highest priority inherited through this mutex.
+};
 
 void sp0re_thread_create(
     sp0re_thread* thread,

@@ -102,11 +102,14 @@ static void sp0re_thread_init(
 
     thread->sp = sp;
 
+    thread->base_priority = priority;
     thread->priority = priority;
 
     thread->tick_to_wake_at = 0U;
 
     thread->blocking_object = NULL;
+
+    thread->owned_mutexes = NULL;
 }
 
 static void sp0re_init()
@@ -159,7 +162,25 @@ static void sp0re_schedule()
     }
 }
 
-// Note: Get the thread with the highest priority blocking on a object.
+/* Note: This method should be called inside critical section.
+ * Wakes the thread and cancels blocking on an object.
+ */
+static inline void sp0re_thread_wake(sp0re_thread* thread)
+{
+    // Note: Access is not atomic.
+    thread->tick_to_wake_at = g_tick;
+
+    // Note: Stop blocking on any objects.
+    thread->blocking_object = NULL;
+}
+
+static inline void sp0re_thread_block_on_object(sp0re_thread* thread, void* object, sp0re_tick ticks)
+{
+    thread->tick_to_wake_at = ticks == SP0RE_TICK_MAX ? ticks : g_tick + ticks;
+    thread->blocking_object = object;
+}
+
+// Note: Get the thread with the highest priority blocking on an object.
 static sp0re_thread* sp0re_get_highest_priority_waiter(void* blocking_object)
 {
     sp0re_thread* highest_priority_waiter = NULL;
@@ -401,11 +422,7 @@ void sp0re_wake(sp0re_thread* thread)
     uint32_t primask;
     SP0RE_ENTER_CRITICAL(primask);
 
-    // Note: Access is not atomic.
-    thread->tick_to_wake_at = g_tick;
-
-    // Note: Stop blocking on an object (if the thread is).
-    thread->blocking_object = NULL;
+    sp0re_thread_wake(thread);
 
     SP0RE_EXIT_CRITICAL(primask);
 
@@ -438,21 +455,20 @@ sp0re_error sp0re_semaphore_wait(sp0re_semaphore* semaphore, sp0re_tick ticks)
         return SP0RE_OK;
     }
 
-    if (ticks != 0) {
-        thread_running->tick_to_wake_at = g_tick + ticks;
-        thread_running->blocking_object = semaphore;
+    if (ticks != 0U) {
+        sp0re_thread_block_on_object(thread_running, semaphore, ticks);
     }
 
-    thread_running->blocking_object_acquired = false;
+    thread_running->semaphore_acquired = false;
 
     SP0RE_EXIT_CRITICAL(primask);
 
-    if (ticks != 0) {
+    if (ticks != 0U) {
         // Note: Wait for the signal or timeout.
         sp0re_reschedule();
     }
 
-    return thread_running->blocking_object_acquired ? SP0RE_OK : SP0RE_ERROR_TIMEOUT;
+    return thread_running->semaphore_acquired ? SP0RE_OK : SP0RE_ERROR_TIMEOUT;
 }
 
 void sp0re_semaphore_signal(sp0re_semaphore* semaphore)
@@ -463,9 +479,9 @@ void sp0re_semaphore_signal(sp0re_semaphore* semaphore)
     sp0re_thread* thread_to_wake = sp0re_get_highest_priority_waiter(semaphore);
 
     if (thread_to_wake) {
-        thread_to_wake->tick_to_wake_at = g_tick;
-        thread_to_wake->blocking_object = NULL;
-        thread_to_wake->blocking_object_acquired = true;
+        sp0re_thread_wake(thread_to_wake);
+
+        thread_to_wake->semaphore_acquired = true;
     }
     else if (semaphore->count < semaphore->count_max) {
         ++semaphore->count;
@@ -482,8 +498,19 @@ void sp0re_mutex_create(sp0re_mutex* mutex)
 {
     SP0RE_ASSERT(mutex != NULL);
 
+    mutex->next = NULL;
     mutex->owner = NULL;
-    mutex->owner_base_priority = SP0RE_THREAD_PRIORITY_LOWEST;
+    mutex->inherited_priority = SP0RE_THREAD_PRIORITY_LOWEST;
+}
+
+static void sp0re_mutex_lock_internal(sp0re_mutex* mutex, sp0re_thread* thread)
+{
+    mutex->owner = thread;
+    mutex->inherited_priority = thread->priority;
+
+    // Note: Insert the mutex at the start of the list of owned mutexes.
+    mutex->next = thread->owned_mutexes;
+    thread->owned_mutexes = mutex;
 }
 
 sp0re_error sp0re_mutex_lock(sp0re_mutex* mutex, sp0re_tick ticks)
@@ -493,14 +520,15 @@ sp0re_error sp0re_mutex_lock(sp0re_mutex* mutex, sp0re_tick ticks)
     uint32_t primask;
     SP0RE_ENTER_CRITICAL(primask);
 
-    if (mutex->owner == NULL) {
-        mutex->owner = thread_running;
-        mutex->owner_base_priority = thread_running->priority;
+    if (mutex->owner == NULL) /* Mutex is unlocked. */ {
+        sp0re_mutex_lock_internal(mutex, thread_running);
 
         SP0RE_EXIT_CRITICAL(primask);
 
         return SP0RE_OK;
     }
+
+    /* Mutex is locked. */
 
     if (ticks == 0U) {
         SP0RE_EXIT_CRITICAL(primask);
@@ -508,37 +536,71 @@ sp0re_error sp0re_mutex_lock(sp0re_mutex* mutex, sp0re_tick ticks)
         return SP0RE_ERROR_TIMEOUT;
     }
 
-    if (thread_running->priority > mutex->owner->priority) {
-        // Note: Priority inheritance protocol.
-        mutex->owner->priority = thread_running->priority;
-    }
+    // Note: Block on the mutex.
+    sp0re_thread_block_on_object(thread_running, mutex, ticks);
 
-    thread_running->tick_to_wake_at = ticks == SP0RE_TICK_MAX ? ticks : g_tick + ticks;
-    thread_running->blocking_object = mutex;
+    // Note: Priority inheritance protocol.
+    if (thread_running->priority > mutex->inherited_priority) {
+        // Note: Register the priority of the highest priority waiter.
+        mutex->inherited_priority = thread_running->priority;
+
+        // Note: Make the mutex owner inherit the priority.
+        if (mutex->inherited_priority > mutex->owner->priority) {
+            mutex->owner->priority = mutex->inherited_priority;
+        }
+    }
 
     SP0RE_EXIT_CRITICAL(primask);
 
     sp0re_reschedule();
 
+    // Note: mutex->owner should be qualified as volatile, because it can change outside of this function.
     return mutex->owner == thread_running ? SP0RE_OK : SP0RE_ERROR_TIMEOUT;
+}
+
+static void sp0re_recalculate_inherited_priority(sp0re_thread* thread)
+{
+    // Note: The thread's priority could have been inherited even if no waiter was found (due to timeout on blocked object).
+    sp0re_thread_priority priority = thread_running->base_priority;
+
+    /* Note: Iterate through the list of owned mutexes.
+     * The thread may have locked other mutexes. If PIP occured
+     * on any of them, it should be taken into account.
+     */
+    sp0re_mutex* mutex = thread_running->owned_mutexes;
+    while (mutex != NULL) {
+        if (mutex->inherited_priority > priority) {
+            priority = mutex->inherited_priority;
+        }
+
+        mutex = mutex->next;
+    }
+
+    thread->priority = priority;
 }
 
 void sp0re_mutex_unlock(sp0re_mutex* mutex)
 {
     SP0RE_ASSERT(mutex);
     SP0RE_ASSERT(mutex->owner == thread_running);
+    SP0RE_ASSERT(thread_running->owned_mutexes == mutex); // Mutexes should be unlocked in reverse order they were locked.
 
     uint32_t primask;
     SP0RE_ENTER_CRITICAL(primask);
 
-    // Note: Thread's priority could have been inherited even if no waiter was found (due to their timeout on lock).
-    thread_running->priority = mutex->owner_base_priority;
+    // Note: Remove the mutex from the top of the list of owned mutexes.
+    thread_running->owned_mutexes = thread_running->owned_mutexes->next;
 
-    sp0re_thread* thread_to_wake = sp0re_get_highest_priority_waiter(mutex);
+    sp0re_recalculate_inherited_priority(thread_running);
 
-    if (thread_to_wake == NULL) {
+    sp0re_thread* highest_priority_waiter = sp0re_get_highest_priority_waiter(mutex);
+
+    if (highest_priority_waiter == NULL) {
+        /* If no waiter was found, simply unlock the mutex. */
+
+        // Note: Unlock the mutex.
         mutex->owner = NULL;
-        mutex->owner_base_priority = SP0RE_THREAD_PRIORITY_LOWEST;
+        mutex->inherited_priority = SP0RE_THREAD_PRIORITY_LOWEST;
 
         SP0RE_EXIT_CRITICAL(primask);
 
@@ -547,13 +609,13 @@ void sp0re_mutex_unlock(sp0re_mutex* mutex)
         return;
     }
 
-    mutex->owner = thread_to_wake;
-    mutex->owner_base_priority = thread_to_wake->priority;
+    sp0re_mutex_lock_internal(mutex, highest_priority_waiter);
 
-    thread_to_wake->tick_to_wake_at = g_tick;
-    thread_to_wake->blocking_object = NULL;
+    sp0re_thread_wake(highest_priority_waiter);
 
     SP0RE_EXIT_CRITICAL(primask);
 
-    sp0re_reschedule();
+    if (highest_priority_waiter->priority > thread_running->priority) {
+        sp0re_reschedule();
+    }
 }
