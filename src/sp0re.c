@@ -315,6 +315,40 @@ void sp0re_thread_create(
     threads[thread_count++] = thread;
 }
 
+void sp0re_thread_destroy(sp0re_thread* thread)
+{
+    if (thread == NULL) {
+        thread = thread_running;
+    }
+
+    SP0RE_ASSERT(thread != &idle_thread);
+    SP0RE_ASSERT(thread->blocking_object == NULL); // TODO: Release resources automatically?
+
+    uint32_t primask;
+    SP0RE_ENTER_CRITICAL(primask);
+
+    // Note: Remove the thread from the global threads array.
+    for (uint8_t thread_index = 0U; thread_index < thread_count; ++thread_index) {
+        if (threads[thread_index] == thread) {
+            threads[thread_index] = threads[--thread_count];
+
+            break;
+        }
+
+        // Note: Assert if the thread was not found in the global threads array.
+        SP0RE_ASSERT(thread_index != (thread_count - 1));
+    }
+
+    // Note: If the thread being destroyed is the thread running.
+    if (thread == thread_running) {
+        thread_running = NULL;
+
+        sp0re_reschedule();
+    }
+
+    SP0RE_EXIT_CRITICAL(primask);
+}
+
 void sp0re_start()
 {
     sp0re_init();

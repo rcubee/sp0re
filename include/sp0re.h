@@ -75,6 +75,8 @@ void sp0re_thread_create(
     uint32_t stack_buf_capacity
 );
 
+void sp0re_thread_destroy(sp0re_thread* thread);
+
 void sp0re_start();
 
 void sp0re_reschedule();
